@@ -1,0 +1,38 @@
+[build]
+# AMI id to use for the build instance.
+ami_id="ami-11718071"
+
+# Security group id for the build instance.
+security_group_id="sg-xxxxxxx"
+
+# Ssh Key Name
+ssh_key_name="mykeyname"
+
+# Ssh Key Path for the above key (or use ssh-agent).
+# Looking in users homedir ~/<name>
+ssh_key_path="/.ssh/id_rsa"
+
+# Region to build in.
+region="us-west-2"
+
+# Image Size (in GB)
+image_size=8
+
+# Script to run for the build.
+payload_script="./chrootarch.sh"
+
+# Pause for manual intervention just before detaching the volume.
+interactive=false
+
+spot_price="0.018"
+instance_size="m3.large"
+
+[publish]
+# Image name prefix
+image_prefix="testing_blackbird_"
+
+# Publish the image to the following additional regions.
+regions=["us-west-2", "us-east-1"]
+
+# Create public image
+make_public=false

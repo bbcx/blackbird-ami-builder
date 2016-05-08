@@ -5,23 +5,25 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	//"gopkg.in/hypersleep/easyssh.v0"
 	"github.com/jeremyd/easyssh"
 	"time"
 	"bufio"
 	"os"
 	"flag"
 	"io/ioutil"
+	"github.com/spf13/viper"
+	"strings"
 )
 
-func req_spot(client *ec2.EC2, ami_id string, price string) (*string) {
+func req_spot(client *ec2.EC2, ami_id string) (*string) {
+	price := viper.GetString("build.spot_price")
 	sec_group_ids := make([]*string, 1)
-	sec0 := "sg-8671c2b5"
+	sec0 := viper.GetString("build.security_group_id")
 	sec_group_ids[0] = &sec0
 
-	keyname := "newcarl"
+	keyname := viper.GetString("build.ssh_key_name")
 	instancetype := ec2.InstanceTypeM3Large
-
+	//instancetype := viper.GetString("build.instance_size")
 	lspec := ec2.RequestSpotLaunchSpecification{
 		KeyName: &keyname,
 		//UserData: ""54.184.34.9,
@@ -36,7 +38,10 @@ func req_spot(client *ec2.EC2, ami_id string, price string) (*string) {
 	req, resp := client.RequestSpotInstancesRequest(&params)
 	err := req.Send()
 	if err == nil { // resp is now filled
-		//fmt.Println(resp)
+		fmt.Println(resp)
+	} else {
+		fmt.Println(err)
+		fmt.Println(resp)
 	}
 	return resp.SpotInstanceRequests[0].SpotInstanceRequestId
 }
@@ -91,11 +96,13 @@ func create_and_attach_volume(client *ec2.EC2, instance_id *string) (volume_id *
 	}
 	//fmt.Println(iresp)
 	availability_zone := iresp.Reservations[0].Instances[0].Placement.AvailabilityZone
+	
+	image_size := int64(viper.GetInt("build.image_size"))
 
 	// CREATE VOLUME
 	vparams := &ec2.CreateVolumeInput{
 		AvailabilityZone: availability_zone, // Required
-		Size:             aws.Int64(10),
+		Size:             aws.Int64(image_size),
 		VolumeType:       aws.String("gp2"),
 	}
 	vresp, verr := client.CreateVolume(vparams)
@@ -130,7 +137,7 @@ func ssh_cmd(instance_ip string, command string) (success bool) {
 		User:   "root",
 		Server: instance_ip,
 		// Optional key or Password without either we try to contact your agent SOCKET
-		Key:  "/.ssh/newcarl.pem",
+		Key:  viper.GetString("build.ssh_key_path"),
 		Port: "22",
 	}
 	// Call Run method with command you want to run on remote server.
@@ -152,7 +159,7 @@ func ssh_cp(instance_ip string, file string) {
 		User:   "root",
 		Server: instance_ip,
 		// Optional key or Password without either we try to contact your agent SOCKET
-		Key:  "/.ssh/newcarl.pem",
+		Key:  viper.GetString("build.ssh_key_path"),
 		Port: "22",
 	}
 	// Call Scp method with file you want to upload to remote server.
@@ -274,18 +281,30 @@ func harvest_software_versions(client *ec2.EC2, instance_ip *string) {
 }
 
 func main() {
+	
+
+	viper.SetConfigName("config")
+	viper.AddConfigPath(".")
+	viper.SetEnvPrefix("BB")
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	err := viper.ReadInConfig() // Find and read the config file
+	if err != nil { // Handle errors reading the config file
+	    panic(fmt.Errorf("Fatal error config file: %s \n", err))
+	}
+	
 	// Flags
-	var interactive_flag = flag.Bool("interactive", false, "pause for user interaction")
-	var image_basename = flag.String("image-name", "blackbird", "the basename of the image to create")
-	var payload_script_name = flag.String("payload-script", "./chrootalpine.sh", "name of build script in cwd")
+	var interactive_flag = flag.Bool("interactive", viper.GetBool("build.interactive"), "pause for user interaction")
+	var image_prefix = flag.String("image-prefix", viper.GetString("build.image_prefix"), "the basename of the image to create")
+	var payload_script_name = flag.String("payload-script", viper.GetString("build.payload_script"), "name of build script in cwd")
 	var use_existing_builder = flag.Bool("use-existing-builder", true, "use the existing build instance")
 	flag.Parse()
-
+	
 	// Main Logic
-  t := time.Now()
-  timestamp := t.Format("2006-01-02-150405")
-	image_title := *image_basename + timestamp
-	svc := ec2.New(session.New(), &aws.Config{Region: aws.String("us-west-2")})
+	t := time.Now()
+	timestamp := t.Format("2006-01-02-150405")
+	image_title := *image_prefix + timestamp
+	svc := ec2.New(session.New(), &aws.Config{Region: aws.String(viper.GetString("build.region"))})
 	// Check for existing builder
 	spot_req_id := aws.String("")
 	if *use_existing_builder {
@@ -298,17 +317,17 @@ func main() {
 		spot_req_id = aws.String(string(dat))
 	} else {
 		fmt.Println("Requesting spot instance...")
-		spot_req_id = req_spot(svc, "ami-11718071", "0.018")
+		spot_req_id = req_spot(svc, viper.GetString("build.ami_id"))
 		write_spot_state(spot_req_id)
 	}
 	//spot_req_id := aws.String("sir-03hfzd70")
 	fmt.Println("Waiting for spot instance to become active...")
 	instance_id := wait_for_spot_req_active(svc, spot_req_id)
-  // get it's IP address
+  	// get it's IP address
 	fmt.Println("Getting instance ip address...")
 	instance_ip := get_instance_ip(svc, instance_id)
 	fmt.Println("Instance IP address: " + *instance_ip)
-	// create and attach volume
+	// create and attach
 	fmt.Println("Creating and attaching new volume...")
 	volume_id := create_and_attach_volume(svc, instance_id)
 	fmt.Println("Waiting for ssh connect...")
@@ -367,7 +386,7 @@ func main() {
 	cleanup(svc, volume_id)
 	//# launch AMI
 	fmt.Println("Launching test instance with this new AMI...")
-	test_spot_req_id := req_spot(svc, *ami_id, "0.018")
+	test_spot_req_id := req_spot(svc, *ami_id)
 	test_instance_id := wait_for_spot_req_active(svc, test_spot_req_id)
 	test_instance_ip := get_instance_ip(svc, test_instance_id)
 	fmt.Println("test instance public ip: " + *test_instance_ip)

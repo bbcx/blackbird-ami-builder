@@ -1,3 +1,7 @@
 src
 pkg
 *.sw*
+config.toml
+*.state
+buildami
+bin/
