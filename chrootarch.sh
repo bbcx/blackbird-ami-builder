@@ -388,7 +388,7 @@ if [ ! -f ${PACMAN_KEYRING_DIR}/secring.gpg ]; then
 	# sense on a headless server. Instead, manually import keys and batch
 	# sign them. This is kind of messy, but we want the host to be usable
 	# as soon as the user logs on.
-	for KEYRING in archlinux ec2; do
+	for KEYRING in archlinux ec2 bbs; do
 		"${GPG_PACMAN[@]}" --import "${KEYRING_IMPORT_DIR}/${KEYRING}.gpg"
 		"${GPG_PACMAN[@]}" --import-ownertrust "${KEYRING_IMPORT_DIR}/${KEYRING}-trusted"
 		for KEY in $(cat "${KEYRING_IMPORT_DIR}/${KEYRING}-trusted" | cut -d':' -f 1); do
