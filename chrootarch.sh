@@ -6,6 +6,45 @@ KVARIANT=-ec2
 DEV=$1
 [ -z "$DEV" ] && echo "usage: install <DEVICE>" && exit 1
 
+
+function import_gpg_key_bbcx() {
+	echo "
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v2
+
+mQENBFctGs4BCACos7zwa5L34JdQJddKR7n8flDkdnKHwtUv8zRiYvFOShcOt2j5
++coF+L++lkoVRgcvrucPG8SoAZp9oJ1Ng7jOBKUuB1gjvZThFypPJ7pc/erpRILM
+Ulg+c3QdPGWe5Wa+srbM2vMbr0WkkC9+Lwi0HajJ//pQ+UF9ZPLp8iwGT1jaUkOr
+bBbV0WKEslJvLD4oZgzRFH5sQfXCAYvsaQUVoqPg7zD/kjO0MIJ+OJS2GJ8pAH64
+F4+gJfNg67Ll1h37qnGqrRVMGyxn+1/6uuR4rslYbEKJX7nncxX/jHRPqvWADRGb
+vyDb/6jAEDpjdhmzrqqK1pZqLQkNWL9AO4ZVABEBAAG0LEplcmVteSBEZWluaW5n
+ZXIgPGplcmVteWRlaW5pbmdlckBnbWFpbC5jb20+iQE3BBMBCAAhBQJXLRrOAhsD
+BQsJCAcCBhUICQoLAgQWAgMBAh4BAheAAAoJEDLLS1XXinC3LhMH/3l6qeEUvglU
+hdljaW+APInzPDeagni42Os9iMNBlO4eCi3sGTJ0fBartv0VoVWJqFlYQeiesHvm
+fWNN61TTg9SNrymkpbz7af/IvAvZmuL4+cgJohVkwOhS5nXgCstbfEhLBwe+65mI
+TfsjJcUlCulrtz61rMwoVLdkCOPX4v23qZS5ew6+J8ovrkXW6SGHz5Ro/mKr8gLY
+Uw3HCHj2nQ4EnaT8oIuvV2DsMXpunIejgQTGqU1mh6ZFvI0DiHCi7yD/Wq8A9/Y6
+GbSeocqGomPH12mj0EinyyfW9CH+TfbqYvN9lRi+O9kKrBkwJu5PP2jCRQsKUJTb
+uldivTRevM+5AQ0EVy0azgEIAOYUy2sdtjWlPqCRrrnWxUU2MlcS8RKtwj7oStoo
+zw5JrRmuPHsx9r3RxWtLCrnvCaWhxoR8SrsHNNoyjoSkUaiuDF/HVogmvPPzHA3h
++GpYZ3XhzcxTidH06PAfChGBx+JSfWRVNHRAjehqJXr2KDVT31EHFrbuI0LyITWh
+H3xqnu4oKwnRzyG4d573Ax2Wc7UPiRpK5bcziVaFqhZRz62uK+tlzP0QX4sjH79l
+gC1qw+8SIPXbwSFlwOMZsDXCYAJJD5XyCeKnnKTXKXWk9ReBb4LPOJH37PTwsm/O
+IQom4WNwMZXm9p+BRgCMFlQXMCb4dIi5hEbe225mSRuFlOkAEQEAAYkBHwQYAQgA
+CQUCVy0azgIbDAAKCRAyy0tV14pwt42zB/9pEs+hfbrYCtiVkHj2w5Alc+WckqRZ
+GKTX7qkpLYTw1ekuJa488r/3h19g6SRPFzXwpQ7/irzj59lxvsYd5NbUHo9ReHsL
+FSp5cfHLKI4nwrUKtsKrBoGdMIpsVamUNnqNICKJm4TmrZQBt0/PwSafbByLCGMX
+UOZugTACNRQHGxKzYkIFCLzKM5doQ+R3pCYEWKVCZxH1+hCPB4Os5xINlAEdQ3Dx
+kM0mdGkyN6Nkc0cDgRk2YB6JznpRarIiZxgFqafH28+fJd+EtpNCM2wZ4f7fvBTI
+U2Grq1btbwUI76Fi7mL457+orD0fpryMLzCT09kq8kICr/N9HirDr7yb
+=lDfw
+-----END PGP PUBLIC KEY BLOCK-----
+" | gpg --command-fd 0 --status-fd 2 --batch --homedir $1/etc/pacman.d/gnupg --import -
+	printf "y\ny\n" | gpg --command-fd 0 --status-fd 2 --batch --homedir $1/etc/pacman.d/gnupg --no-permission-warning --lsign-key D78A70B7
+	printf "4\n" | gpg --command-fd 0 --status-fd 2 --batch --homedir $1/etc/pacman.d/gnupg --no-permission-warning --edit-key D78A70B7 trust quit
+	killall gpg-agent || true
+}
+
 function import_gpg_key() {
 	echo "
 -----BEGIN PGP PUBLIC KEY BLOCK-----
@@ -148,7 +187,7 @@ SigLevel = PackageRequired
 Server = https://www.uplinklabs.net/repo/ec2/$arch
 
 [bbs]
-SigLevel = Never
+SigLevel = PackageRequired
 Server = https://blackbird-software.s3.amazonaws.com/
 
 EOF
@@ -169,14 +208,15 @@ SigLevel = PackageRequired
 Include = /etc/pacman.d/mirrorlist
 EOF
 
-arch-chroot /mnt /bin/bash -c "pacman -Sy"
-
-# Import my GPG key into pacman, so that packages from the ec2 repo can be
+# Import uplinklabs.net and blackbird.cx GPG keys into pacman so that packages from these repos can be
 # installed.
 import_gpg_key /mnt
+import_gpg_key_bbcx /mnt
+
+arch-chroot /mnt /bin/bash -c "pacman -Sy"
 
 # Install EC2 GPG signing keys
-arch-chroot /mnt /bin/bash -c "pacman --noconfirm -S ec2-keyring && (pkill gpg-agent || true)"
+arch-chroot /mnt /bin/bash -c "pacman --noconfirm -S bbs-keyring ec2-keyring && (pkill gpg-agent || true)"
 
 # Fix gnupg now includes dirmngr
 arch-chroot /mnt /bin/bash -c "yes | pacman -Syu gnupg"
@@ -185,7 +225,6 @@ arch-chroot /mnt /bin/bash -c "yes | pacman -Syu gnupg"
 #arch-chroot /mnt /bin/bash -c "pacman --noconfirm -Suu"
 
 # Base packages needed for a working installation:
-#   - audit - audit daemon, needed for kernel auditing and 'perf trace'
 #   - cronie - cron daemon, not in base install anymore
 #   - irqbalance - helps most on many-core instance types with IRQ throughput
 #   - lrzip - eventually will be used for packaging
@@ -194,8 +233,7 @@ arch-chroot /mnt /bin/bash -c "yes | pacman -Syu gnupg"
 #   - rng-tools - initial pacman keychain generation takes forever on
 #                 a headless server unless you have something like rng-tools to
 #                 fill up the entropy pool.
-#   - gnupg - we're using gpg 2.0.x because 2.1.x has some serious bugs right now
-#
+
 arch-chroot /mnt /bin/bash -c "pacman --needed --noconfirm -S audit cronie irqbalance lrzip openssh rng-tools"
 
 # Convenience packages:
@@ -377,7 +415,7 @@ cat >> /mnt/etc/bash.bashrc << "EOF"
 shopt -s checkwinsize
 EOF
 
-SERVICES="auditd cronie rngd rc-local irqbalance systemd-timesyncd"
+SERVICES="cronie rngd rc-local irqbalance systemd-timesyncd docker"
 SOCKETS="sshd"
 
 # Add a goofy rc.local service which will allow us to fetch an SSH public key

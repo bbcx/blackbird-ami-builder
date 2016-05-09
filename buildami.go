@@ -148,10 +148,9 @@ func ssh_cmd(instance_ip string, command string) (success bool) {
 		fmt.Println("Can't run remote command: " + err.Error())
 		//fmt.Println(response)
 		return false
-	} else {
-		//fmt.Println(response)
-		return true
-	}
+	} 
+	//fmt.Println(response)
+	return true
 }
 
 func ssh_cp(instance_ip string, file string) {
@@ -274,6 +273,7 @@ func cleanup(client *ec2.EC2, volume_id *string) {
 
 func harvest_software_versions(client *ec2.EC2, instance_ip *string) {
 	ssh_cmd(*instance_ip, "pacman -Q linux-ec2 2> /dev/null")
+	ssh_cmd(*instance_ip, "pacman -Q systemd 2> /dev/null")
 	ssh_cmd(*instance_ip, "pacman -Q kubernetes 2> /dev/null")
 	ssh_cmd(*instance_ip, "pacman -Q etcd 2> /dev/null")
 	ssh_cmd(*instance_ip, "pacman -Q rkt 2> /dev/null")
@@ -281,8 +281,7 @@ func harvest_software_versions(client *ec2.EC2, instance_ip *string) {
 }
 
 func main() {
-	
-
+	// Viper configuration engine
 	viper.SetConfigName("config")
 	viper.AddConfigPath(".")
 	viper.SetEnvPrefix("BB")
@@ -295,7 +294,7 @@ func main() {
 	
 	// Flags
 	var interactive_flag = flag.Bool("interactive", viper.GetBool("build.interactive"), "pause for user interaction")
-	var image_prefix = flag.String("image-prefix", viper.GetString("build.image_prefix"), "the basename of the image to create")
+	var image_prefix = flag.String("image-prefix", viper.GetString("publish.image_prefix"), "the basename of the image to create")
 	var payload_script_name = flag.String("payload-script", viper.GetString("build.payload_script"), "name of build script in cwd")
 	var use_existing_builder = flag.Bool("use-existing-builder", true, "use the existing build instance")
 	flag.Parse()
@@ -342,14 +341,13 @@ func main() {
 	ssh_cmd(*instance_ip, "chmod +x " + *payload_script_name)
 	// ssh there and run the payload
 	fmt.Println("Running" + *payload_script_name)
-  if ssh_cmd(*instance_ip, "sudo " + *payload_script_name + " /dev/xvdx 2> install-stderr.log") {
+  if ssh_cmd(*instance_ip, "sudo " + *payload_script_name + " /dev/xvdx") {
 		fmt.Println("script success!")
 		//ssh_cmd(*instance_ip, "sudo systemctl halt")// poweroff
 	} else {
 		fmt.Println("fail!")
-  	ssh_cmd(*instance_ip, "cat install-stderr.log")
 		//fmt.Println("umounting /mnt")
-		//ssh_cmd(*instance_ip, "sudo umount /mnt")
+		ssh_cmd(*instance_ip, "sudo umount /mnt")
 		fmt.Println("Builder IP: " + *instance_ip)
 		fmt.Println("Image build payload failed!  Aborting in-flight for inspection.")
 		fail_reader := bufio.NewReader(os.Stdin)
@@ -359,8 +357,9 @@ func main() {
 	// Pause for user inspection
 	if *interactive_flag {
 		reader := bufio.NewReader(os.Stdin)
-	  fmt.Print("We're done in the chroot. Press ENTER to continue:")
-	  reader.ReadString('\n')
+		fmt.Println("Instance IP address: " + *instance_ip)
+		fmt.Print("We're done in the chroot. Press ENTER to continue:")
+		reader.ReadString('\n')
 	}
 	// detach the volume
 	fmt.Println("Detaching volume...")
@@ -390,5 +389,12 @@ func main() {
 	test_instance_id := wait_for_spot_req_active(svc, test_spot_req_id)
 	test_instance_ip := get_instance_ip(svc, test_instance_id)
 	fmt.Println("test instance public ip: " + *test_instance_ip)
-	//harvest_software_versions(svc, test_instance_ip)
+	
+	fmt.Println("waiting for ssh...")
+	for {
+		if ssh_cmd(*test_instance_ip, "/bin/true") { break }
+		time.Sleep(time.Second * 5)
+	}	
+	harvest_software_versions(svc, test_instance_ip)
+	fmt.Println("AMI: " + *ami_id)
 }
