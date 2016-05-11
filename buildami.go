@@ -42,7 +42,7 @@ func req_spot(client *ec2.EC2, ami_id string) (*string) {
 	req, resp := client.RequestSpotInstancesRequest(&params)
 	err := req.Send()
 	if err == nil { // resp is now filled
-		fmt.Println(resp)
+		//fmt.Println(resp)
 	} else {
 		fmt.Println(err)
 		fmt.Println(resp)
@@ -112,9 +112,9 @@ func get_instance_ip(client *ec2.EC2, id *string) (ip *string) {
 
 func write_spot_state(spot_req_id *string) {
 		d1 := []byte(*spot_req_id)
-    err := ioutil.WriteFile(".hello.state", d1, 0644)
+    err := ioutil.WriteFile(".buildami.state", d1, 0644)
 		if err != nil {
-			fmt.Println("WARNING: error occured writing to .hello.state file")
+			fmt.Println("WARNING: error occured writing to .buildami.state file")
 		}
 }
 
