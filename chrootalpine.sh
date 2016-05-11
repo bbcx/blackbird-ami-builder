@@ -71,7 +71,7 @@ EOF
 	umount -l /bootstrap/proc
 	umount -l /bootstrap/dev
 	umount -l /bootstrap/sys
-	mount /dev/xvdf3 $final_stage
+	mount /dev/xvdx3 $final_stage
 
 	cat <<EAR> $final_stage/etc/local.d/00_populate_ssh_authorized_keys.start
 #!/bin/bash -e
