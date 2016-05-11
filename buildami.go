@@ -230,6 +230,7 @@ func wait_snapshot(client *ec2.EC2, snapshot_id *string) {
 }
 
 func create_image(client *ec2.EC2, snapshot_id *string, title string) (image_id *string) {
+	image_size := int64(viper.GetInt("build.image_size"))
 	params := &ec2.RegisterImageInput{
 		Name:         aws.String(title), // Required
 		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
@@ -238,7 +239,7 @@ func create_image(client *ec2.EC2, snapshot_id *string, title string) (image_id 
 				Ebs: &ec2.EbsBlockDevice{
 					DeleteOnTermination: aws.Bool(true),
 					SnapshotId:          snapshot_id,
-					VolumeSize:          aws.Int64(10),
+					VolumeSize:          aws.Int64(image_size),
 					VolumeType:          aws.String("gp2"),
 				},
 			},
