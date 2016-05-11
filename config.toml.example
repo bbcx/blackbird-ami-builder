@@ -5,6 +5,9 @@ ami_id="ami-11718071"
 # Security group id for the build instance.
 security_group_id="sg-xxxxxxx"
 
+# Subnet (VPC)
+subnet_id="subnet-xxxxxxx"
+
 # Ssh Key Name
 ssh_key_name="mykeyname"
 
@@ -25,7 +28,7 @@ payload_script="./chrootarch.sh"
 interactive=false
 
 spot_price="0.018"
-instance_size="m3.large"
+instance_type="m3.large"
 
 [publish]
 # Image name prefix

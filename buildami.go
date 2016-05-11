@@ -22,14 +22,18 @@ func req_spot(client *ec2.EC2, ami_id string) (*string) {
 	sec_group_ids[0] = &sec0
 
 	keyname := viper.GetString("build.ssh_key_name")
-	instancetype := ec2.InstanceTypeM3Large
-	//instancetype := viper.GetString("build.instance_size")
+	//instancetype := ec2.InstanceTypeM3Large
+	instancetype := string(viper.GetString("build.instance_type"))
 	lspec := ec2.RequestSpotLaunchSpecification{
 		KeyName: &keyname,
 		//UserData: ""54.184.34.9,
 		ImageId: &ami_id,
-		InstanceType: &instancetype,
+		InstanceType: aws.String(instancetype),
 		SecurityGroupIds: sec_group_ids }
+		
+	if viper.IsSet("build.subnet_id") {
+		lspec.SubnetId = aws.String(viper.GetString("build.subnet_id"))
+	}
 
 	params := ec2.RequestSpotInstancesInput{
 		SpotPrice: &price,
@@ -46,21 +50,50 @@ func req_spot(client *ec2.EC2, ami_id string) (*string) {
 	return resp.SpotInstanceRequests[0].SpotInstanceRequestId
 }
 
+func cancel_spot_req(client *ec2.EC2, spot_req_id *string) {
+	params := &ec2.CancelSpotInstanceRequestsInput{
+		SpotInstanceRequestIds: []*string{ 
+			spot_req_id,
+		},
+	}
+	_, err := client.CancelSpotInstanceRequests(params)
+
+	if err != nil {
+		// Print the error, cast err to awserr.Error to get the Code and
+		// Message from an error.
+		fmt.Println(err.Error())
+	}
+}
+
 func wait_for_spot_req_active(client *ec2.EC2, spot_req_id *string) (instance_id *string) {
 	params := &ec2.DescribeSpotInstanceRequestsInput{
 		SpotInstanceRequestIds: []*string{ spot_req_id } }
 
 	for {
 		resp, err := client.DescribeSpotInstanceRequests(params)
+		// If there is a problem with the state of the Spot instance then delete state and quit.
 		if err != nil {
 			fmt.Println(err.Error())
+			fmt.Println("ERROR: Could not determine state of spot instance.  Aborting and clearing cache spot instance id. (Retry?)")
+			os.Remove(".buildami.state")
+			panic("exiting")
 		}
+		if *resp.SpotInstanceRequests[0].State == ec2.SpotInstanceStateClosed {
+			fmt.Println("ERROR: spot instance state was closed.  Aborting and clearing cache spot instance id. (Retry?)")
+			os.Remove(".buildami.state")
+			panic("exiting")
+		}
+		if *resp.SpotInstanceRequests[0].Status.Code == "price-too-low" {
+			fmt.Println("ERROR: spot instance price was set too low.")
+			fmt.Println(*resp.SpotInstanceRequests[0].Status.Message)
+			cancel_spot_req(client, spot_req_id)
+			os.Remove(".buildami.state")
+			panic("exiting")
+		}		
 		if *resp.SpotInstanceRequests[0].State == ec2.SpotInstanceStateActive {
-			//fmt.Println(resp)
 			return resp.SpotInstanceRequests[0].InstanceId
 		}
 		time.Sleep(5 * time.Second)
-		//fmt.Println(resp)
 	}
 }
 
@@ -307,12 +340,8 @@ func main() {
 	svc := ec2.New(session.New(), &aws.Config{Region: aws.String(viper.GetString("build.region"))})
 	// Check for existing builder
 	spot_req_id := aws.String("")
-	if *use_existing_builder {
-		dat, err := ioutil.ReadFile(".hello.state")
-		if err != nil {
-			panic(err)
-		}
-		//fmt.Print(string(dat))
+	dat, err := ioutil.ReadFile(".buildami.state")
+	if *use_existing_builder && err == nil {
 		fmt.Println("Using existing builder from " + string(dat))
 		spot_req_id = aws.String(string(dat))
 	} else {
