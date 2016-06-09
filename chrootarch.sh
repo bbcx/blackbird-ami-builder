@@ -259,8 +259,8 @@ fi
 
 arch-chroot /mnt /bin/bash -c "mkinitcpio -p linux${KVARIANT}"
 
-# CoreOS packages
-arch-chroot /mnt /bin/bash -c "pacman --noconfirm -Sy rkt coreos-cloudinit-git update-ssh-keys kubernetes etcd docker net-tools"
+# CoreOS & Blackbird additional packages
+arch-chroot /mnt /bin/bash -c "pacman --noconfirm -Sy rkt coreos-cloudinit-git update-ssh-keys kubernetes etcd docker net-tools wget dnsutils conntrack-tools ethtool libmicrohttpd git python-aws-cli"
 
 # Install the bootloader used in HVM. For PV, we just use the pv-grub AKI.
 if [ $EFI_BOOT ]; then
@@ -415,7 +415,7 @@ cat >> /mnt/etc/bash.bashrc << "EOF"
 shopt -s checkwinsize
 EOF
 
-SERVICES="cronie rngd rc-local irqbalance systemd-timesyncd docker"
+SERVICES="cronie rngd rc-local irqbalance systemd-timesyncd"
 SOCKETS="sshd"
 
 # Add a goofy rc.local service which will allow us to fetch an SSH public key

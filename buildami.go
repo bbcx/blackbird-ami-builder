@@ -276,7 +276,22 @@ func create_image(client *ec2.EC2, snapshot_id *string, title string) (image_id 
 					VolumeType:          aws.String("gp2"),
 				},
 			},
-			// More values...
+      {
+        DeviceName: aws.String("/dev/sdb"),
+        VirtualName: aws.String("ephemeral0"),  
+      },
+      {
+        DeviceName: aws.String("/dev/sdc"),
+        VirtualName: aws.String("ephemeral0"),  
+      },
+      {
+        DeviceName: aws.String("/dev/sdd"),
+        VirtualName: aws.String("ephemeral0"),  
+      },
+      {
+        DeviceName: aws.String("/dev/sde"),
+        VirtualName: aws.String("ephemeral0"),  
+      },
 		},
 		Architecture:				aws.String(ec2.ArchitectureValuesX8664),
 		Description:        aws.String(title),
