@@ -1,21 +1,22 @@
 package main
 
 import (
+	"bufio"
+	"flag"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"strings"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/jeremyd/easyssh"
-	"time"
-	"bufio"
-	"os"
-	"flag"
-	"io/ioutil"
 	"github.com/spf13/viper"
-	"strings"
 )
 
-func req_spot(client *ec2.EC2, ami_id string) (*string) {
+func req_spot(client *ec2.EC2, ami_id string) *string {
 	price := viper.GetString("build.spot_price")
 	sec_group_ids := make([]*string, 1)
 	sec0 := viper.GetString("build.security_group_id")
@@ -27,17 +28,17 @@ func req_spot(client *ec2.EC2, ami_id string) (*string) {
 	lspec := ec2.RequestSpotLaunchSpecification{
 		KeyName: &keyname,
 		//UserData: ""54.184.34.9,
-		ImageId: &ami_id,
-		InstanceType: aws.String(instancetype),
-		SecurityGroupIds: sec_group_ids }
-		
+		ImageId:          &ami_id,
+		InstanceType:     aws.String(instancetype),
+		SecurityGroupIds: sec_group_ids}
+
 	if viper.IsSet("build.subnet_id") {
 		lspec.SubnetId = aws.String(viper.GetString("build.subnet_id"))
 	}
 
 	params := ec2.RequestSpotInstancesInput{
-		SpotPrice: &price,
-		LaunchSpecification: &lspec }
+		SpotPrice:           &price,
+		LaunchSpecification: &lspec}
 
 	req, resp := client.RequestSpotInstancesRequest(&params)
 	err := req.Send()
@@ -50,9 +51,37 @@ func req_spot(client *ec2.EC2, ami_id string) (*string) {
 	return resp.SpotInstanceRequests[0].SpotInstanceRequestId
 }
 
+func launchInstance(client *ec2.EC2, ami *string) *string {
+	launchParams := &ec2.RunInstancesInput{
+		ImageId:  ami,
+		MaxCount: aws.Int64(1),
+		MinCount: aws.Int64(1),
+		//EbsOptimized:          aws.Bool(true),
+		//IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
+		//Arn: aws.String(instanceProfileArn),
+		//	Name: aws.String("k8s-master" + viper.GetString("cluster-name")),
+		//},
+		InstanceInitiatedShutdownBehavior: aws.String("terminate"),
+		InstanceType:                      aws.String("m4.large"),
+		KeyName:                           aws.String(viper.GetString("build.ssh_key_name")),
+		SecurityGroupIds: []*string{
+			aws.String(viper.GetString("build.security_group_id")),
+		},
+		SubnetId: aws.String(viper.GetString("build.subnet_id")),
+		//UserData: aws.String(userData),
+	}
+	resp, err := client.RunInstances(launchParams)
+	if err != nil {
+		fmt.Println("Error launching instance.")
+		fmt.Println(err)
+		return nil
+	}
+	return resp.Instances[0].InstanceId
+}
+
 func cancel_spot_req(client *ec2.EC2, spot_req_id *string) {
 	params := &ec2.CancelSpotInstanceRequestsInput{
-		SpotInstanceRequestIds: []*string{ 
+		SpotInstanceRequestIds: []*string{
 			spot_req_id,
 		},
 	}
@@ -67,7 +96,7 @@ func cancel_spot_req(client *ec2.EC2, spot_req_id *string) {
 
 func wait_for_spot_req_active(client *ec2.EC2, spot_req_id *string) (instance_id *string) {
 	params := &ec2.DescribeSpotInstanceRequestsInput{
-		SpotInstanceRequestIds: []*string{ spot_req_id } }
+		SpotInstanceRequestIds: []*string{spot_req_id}}
 
 	for {
 		resp, err := client.DescribeSpotInstanceRequests(params)
@@ -89,7 +118,7 @@ func wait_for_spot_req_active(client *ec2.EC2, spot_req_id *string) (instance_id
 			cancel_spot_req(client, spot_req_id)
 			os.Remove(".buildami.state")
 			panic("exiting")
-		}		
+		}
 		if *resp.SpotInstanceRequests[0].State == ec2.SpotInstanceStateActive {
 			return resp.SpotInstanceRequests[0].InstanceId
 		}
@@ -99,7 +128,7 @@ func wait_for_spot_req_active(client *ec2.EC2, spot_req_id *string) (instance_id
 
 func get_instance_ip(client *ec2.EC2, id *string) (ip *string) {
 	params := &ec2.DescribeInstancesInput{
-		InstanceIds: []*string{ id } }
+		InstanceIds: []*string{id}}
 
 	resp, err := client.DescribeInstances(params)
 
@@ -110,18 +139,18 @@ func get_instance_ip(client *ec2.EC2, id *string) (ip *string) {
 	return resp.Reservations[0].Instances[0].PublicIpAddress
 }
 
-func write_spot_state(spot_req_id *string) {
-		d1 := []byte(*spot_req_id)
-    err := ioutil.WriteFile(".buildami.state", d1, 0644)
-		if err != nil {
-			fmt.Println("WARNING: error occured writing to .buildami.state file")
-		}
+func write_state(instanceID *string) {
+	d1 := []byte(*instanceID)
+	err := ioutil.WriteFile(".buildami.state", d1, 0644)
+	if err != nil {
+		fmt.Println("WARNING: error occured writing to .buildami.state file")
+	}
 }
 
 func create_and_attach_volume(client *ec2.EC2, instance_id *string) (volume_id *string) {
 	// DESCRIBE INSTANCE TO GET METADATA
 	iparams := &ec2.DescribeInstancesInput{
-		InstanceIds: []*string{ instance_id } }
+		InstanceIds: []*string{instance_id}}
 	iresp, ierr := client.DescribeInstances(iparams)
 	if ierr != nil {
 		fmt.Println(ierr.Error())
@@ -129,7 +158,7 @@ func create_and_attach_volume(client *ec2.EC2, instance_id *string) (volume_id *
 	}
 	//fmt.Println(iresp)
 	availability_zone := iresp.Reservations[0].Instances[0].Placement.AvailabilityZone
-	
+
 	image_size := int64(viper.GetInt("build.image_size"))
 
 	// CREATE VOLUME
@@ -152,7 +181,7 @@ func create_and_attach_volume(client *ec2.EC2, instance_id *string) (volume_id *
 		avparams := &ec2.AttachVolumeInput{
 			Device:     aws.String("/dev/sdx"),
 			InstanceId: instance_id,
-			VolumeId:   save_volume_id }
+			VolumeId:   save_volume_id}
 		_, averr := client.AttachVolume(avparams)
 		if averr != nil {
 			fmt.Println(averr.Error())
@@ -181,7 +210,7 @@ func ssh_cmd(instance_ip string, command string) (success bool) {
 		fmt.Println("Can't run remote command: " + err.Error())
 		//fmt.Println(response)
 		return false
-	} 
+	}
 	//fmt.Println(response)
 	return true
 }
@@ -208,7 +237,7 @@ func ssh_cp(instance_ip string, file string) {
 func detach_volume_from_instance(client *ec2.EC2, volume_id *string, instance_id *string) (success bool) {
 	params := &ec2.DetachVolumeInput{
 		VolumeId:   volume_id, // Required
-		InstanceId: instance_id }
+		InstanceId: instance_id}
 	_, err := client.DetachVolume(params)
 	if err != nil {
 		fmt.Println(err.Error())
@@ -255,7 +284,7 @@ func snapshot_volume(client *ec2.EC2, volume_id *string, snap_title string) (sna
 
 func wait_snapshot(client *ec2.EC2, snapshot_id *string) {
 	params := &ec2.DescribeSnapshotsInput{
-		SnapshotIds: []*string{ snapshot_id }}
+		SnapshotIds: []*string{snapshot_id}}
 	err := client.WaitUntilSnapshotCompleted(params)
 	if err != nil {
 		fmt.Println(err.Error())
@@ -265,7 +294,7 @@ func wait_snapshot(client *ec2.EC2, snapshot_id *string) {
 func create_image(client *ec2.EC2, snapshot_id *string, title string) (image_id *string) {
 	image_size := int64(viper.GetInt("build.image_size"))
 	params := &ec2.RegisterImageInput{
-		Name:         aws.String(title), // Required
+		Name: aws.String(title), // Required
 		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
 			{ // Required
 				DeviceName: aws.String("/dev/sda1"),
@@ -276,26 +305,26 @@ func create_image(client *ec2.EC2, snapshot_id *string, title string) (image_id 
 					VolumeType:          aws.String("gp2"),
 				},
 			},
-      {
-        DeviceName: aws.String("/dev/sdb"),
-        VirtualName: aws.String("ephemeral0"),  
-      },
-      {
-        DeviceName: aws.String("/dev/sdc"),
-        VirtualName: aws.String("ephemeral0"),  
-      },
-      {
-        DeviceName: aws.String("/dev/sdd"),
-        VirtualName: aws.String("ephemeral0"),  
-      },
-      {
-        DeviceName: aws.String("/dev/sde"),
-        VirtualName: aws.String("ephemeral0"),  
-      },
+			{
+				DeviceName:  aws.String("/dev/sdb"),
+				VirtualName: aws.String("ephemeral0"),
+			},
+			{
+				DeviceName:  aws.String("/dev/sdc"),
+				VirtualName: aws.String("ephemeral0"),
+			},
+			{
+				DeviceName:  aws.String("/dev/sdd"),
+				VirtualName: aws.String("ephemeral0"),
+			},
+			{
+				DeviceName:  aws.String("/dev/sde"),
+				VirtualName: aws.String("ephemeral0"),
+			},
 		},
-		Architecture:				aws.String(ec2.ArchitectureValuesX8664),
-		Description:        aws.String(title),
-		RootDeviceName:     aws.String("/dev/sda1"),
+		Architecture:   aws.String(ec2.ArchitectureValuesX8664),
+		Description:    aws.String(title),
+		RootDeviceName: aws.String("/dev/sda1"),
 		//SriovNetSupport:    aws.String("String"),
 		VirtualizationType: aws.String("hvm"),
 	}
@@ -337,56 +366,58 @@ func main() {
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	err := viper.ReadInConfig() // Find and read the config file
-	if err != nil { // Handle errors reading the config file
-	    panic(fmt.Errorf("Fatal error config file: %s \n", err))
+	if err != nil {             // Handle errors reading the config file
+		panic(fmt.Errorf("Fatal error config file: %s \n", err))
 	}
-	
+
 	// Flags
 	var interactive_flag = flag.Bool("interactive", viper.GetBool("build.interactive"), "pause for user interaction")
 	var image_prefix = flag.String("image-prefix", viper.GetString("publish.image_prefix"), "the basename of the image to create")
 	var payload_script_name = flag.String("payload-script", viper.GetString("build.payload_script"), "name of build script in cwd")
 	var use_existing_builder = flag.Bool("use-existing-builder", true, "use the existing build instance")
 	flag.Parse()
-	
+
 	// Main Logic
 	t := time.Now()
 	timestamp := t.Format("2006-01-02-150405")
 	image_title := *image_prefix + timestamp
 	svc := ec2.New(session.New(), &aws.Config{Region: aws.String(viper.GetString("build.region"))})
 	// Check for existing builder
-	spot_req_id := aws.String("")
+	instanceID := aws.String("")
 	dat, err := ioutil.ReadFile(".buildami.state")
 	if *use_existing_builder && err == nil {
 		fmt.Println("Using existing builder from " + string(dat))
-		spot_req_id = aws.String(string(dat))
+		instanceID = aws.String(string(dat))
 	} else {
-		fmt.Println("Requesting spot instance...")
-		spot_req_id = req_spot(svc, viper.GetString("build.ami_id"))
-		write_spot_state(spot_req_id)
+		fmt.Println("Launching Instance")
+		instanceID = launchInstance(svc, aws.String(viper.GetString("build.ami_id")))
+		write_state(instanceID)
 	}
 	//spot_req_id := aws.String("sir-03hfzd70")
-	fmt.Println("Waiting for spot instance to become active...")
-	instance_id := wait_for_spot_req_active(svc, spot_req_id)
-  	// get it's IP address
+	//fmt.Println("Waiting for spot instance to become active...")
+	//instance_id := wait_for_spot_req_active(svc, spot_req_id)
+	// get it's IP address
 	fmt.Println("Getting instance ip address...")
-	instance_ip := get_instance_ip(svc, instance_id)
+	instance_ip := get_instance_ip(svc, instanceID)
 	fmt.Println("Instance IP address: " + *instance_ip)
 	// create and attach
 	fmt.Println("Creating and attaching new volume...")
-	volume_id := create_and_attach_volume(svc, instance_id)
+	volume_id := create_and_attach_volume(svc, instanceID)
 	fmt.Println("Waiting for ssh connect...")
 	// start sshing there
 	for {
-	  if ssh_cmd(*instance_ip, "/bin/true") { break }
+		if ssh_cmd(*instance_ip, "/bin/true") {
+			break
+		}
 		time.Sleep(time.Second * 5)
 	}
 	// SCP the payload install file
 	ssh_cp(*instance_ip, *payload_script_name)
 	//panic("ok ready to DEVELOP")
-	ssh_cmd(*instance_ip, "chmod +x " + *payload_script_name)
+	ssh_cmd(*instance_ip, "chmod +x "+*payload_script_name)
 	// ssh there and run the payload
 	fmt.Println("Running" + *payload_script_name)
-  if ssh_cmd(*instance_ip, "sudo " + *payload_script_name + " /dev/xvdx") {
+	if ssh_cmd(*instance_ip, "sudo "+*payload_script_name+" /dev/xvdx") {
 		fmt.Println("script success!")
 		//ssh_cmd(*instance_ip, "sudo systemctl halt")// poweroff
 	} else {
@@ -396,8 +427,8 @@ func main() {
 		fmt.Println("Builder IP: " + *instance_ip)
 		fmt.Println("Image build payload failed!  Aborting in-flight for inspection.")
 		fail_reader := bufio.NewReader(os.Stdin)
-	  fmt.Print("If you want to fix this manually. Press ENTER to continue the build (CTRL-C to abort):")
-	  fail_reader.ReadString('\n')
+		fmt.Print("If you want to fix this manually. Press ENTER to continue the build (CTRL-C to abort):")
+		fail_reader.ReadString('\n')
 	}
 	// Pause for user inspection
 	if *interactive_flag {
@@ -408,7 +439,7 @@ func main() {
 	}
 	// detach the volume
 	fmt.Println("Detaching volume...")
-	if detach_volume_from_instance(svc, volume_id, instance_id) {
+	if detach_volume_from_instance(svc, volume_id, instanceID) {
 		fmt.Println("volume" + *volume_id + "detached")
 	} else {
 		panic("Fatal Error: failed to detach volume")
@@ -425,21 +456,29 @@ func main() {
 	//# create AMI from snapshot
 	ami_id := create_image(svc, snapshot_id, image_title)
 	fmt.Println("AMI finished build: " + *ami_id)
-  // cleanup un-necessary artifacts
+	// cleanup un-necessary artifacts
 	fmt.Println("Cleanup temporary volume...")
 	cleanup(svc, volume_id)
 	//# launch AMI
 	fmt.Println("Launching test instance with this new AMI...")
-	test_spot_req_id := req_spot(svc, *ami_id)
-	test_instance_id := wait_for_spot_req_active(svc, test_spot_req_id)
-	test_instance_ip := get_instance_ip(svc, test_instance_id)
-	fmt.Println("test instance public ip: " + *test_instance_ip)
-	
+
+	//test_spot_req_id := req_spot(svc, *ami_id)
+	//test_instance_id := wait_for_spot_req_active(svc, test_spot_req_id)
+	//test_instance_ip := get_instance_ip(svc, test_instance_id)
+
+	testInstanceID := launchInstance(svc, ami_id)
+	time.Sleep(time.Second * 10)
+	testInstanceIP := get_instance_ip(svc, testInstanceID)
+
+	fmt.Println("test instance public ip: " + *testInstanceIP)
+
 	fmt.Println("waiting for ssh...")
 	for {
-		if ssh_cmd(*test_instance_ip, "/bin/true") { break }
+		if ssh_cmd(*testInstanceIP, "/bin/true") {
+			break
+		}
 		time.Sleep(time.Second * 5)
-	}	
-	harvest_software_versions(svc, test_instance_ip)
+	}
+	harvest_software_versions(svc, testInstanceIP)
 	fmt.Println("AMI: " + *ami_id)
 }

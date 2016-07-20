@@ -262,6 +262,9 @@ arch-chroot /mnt /bin/bash -c "mkinitcpio -p linux${KVARIANT}"
 # CoreOS & Blackbird additional packages
 arch-chroot /mnt /bin/bash -c "pacman --noconfirm -Sy rkt coreos-cloudinit-git update-ssh-keys kubernetes etcd docker net-tools wget dnsutils conntrack-tools ethtool libmicrohttpd git python-aws-cli"
 
+# Upgrade the rolling release
+arch-chroot /mnt /bin/bash -c "pacman -Syu --noconfirm"
+
 # Install the bootloader used in HVM. For PV, we just use the pv-grub AKI.
 if [ $EFI_BOOT ]; then
 	GRUB_TARGET=x86_64-efi
