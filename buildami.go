@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -15,41 +17,6 @@ import (
 	"github.com/jeremyd/easyssh"
 	"github.com/spf13/viper"
 )
-
-func req_spot(client *ec2.EC2, ami_id string) *string {
-	price := viper.GetString("build.spot_price")
-	sec_group_ids := make([]*string, 1)
-	sec0 := viper.GetString("build.security_group_id")
-	sec_group_ids[0] = &sec0
-
-	keyname := viper.GetString("build.ssh_key_name")
-	//instancetype := ec2.InstanceTypeM3Large
-	instancetype := string(viper.GetString("build.instance_type"))
-	lspec := ec2.RequestSpotLaunchSpecification{
-		KeyName: &keyname,
-		//UserData: ""54.184.34.9,
-		ImageId:          &ami_id,
-		InstanceType:     aws.String(instancetype),
-		SecurityGroupIds: sec_group_ids}
-
-	if viper.IsSet("build.subnet_id") {
-		lspec.SubnetId = aws.String(viper.GetString("build.subnet_id"))
-	}
-
-	params := ec2.RequestSpotInstancesInput{
-		SpotPrice:           &price,
-		LaunchSpecification: &lspec}
-
-	req, resp := client.RequestSpotInstancesRequest(&params)
-	err := req.Send()
-	if err == nil { // resp is now filled
-		//fmt.Println(resp)
-	} else {
-		fmt.Println(err)
-		fmt.Println(resp)
-	}
-	return resp.SpotInstanceRequests[0].SpotInstanceRequestId
-}
 
 func launchInstance(client *ec2.EC2, ami *string) *string {
 	launchParams := &ec2.RunInstancesInput{
@@ -77,53 +44,6 @@ func launchInstance(client *ec2.EC2, ami *string) *string {
 		return nil
 	}
 	return resp.Instances[0].InstanceId
-}
-
-func cancel_spot_req(client *ec2.EC2, spot_req_id *string) {
-	params := &ec2.CancelSpotInstanceRequestsInput{
-		SpotInstanceRequestIds: []*string{
-			spot_req_id,
-		},
-	}
-	_, err := client.CancelSpotInstanceRequests(params)
-
-	if err != nil {
-		// Print the error, cast err to awserr.Error to get the Code and
-		// Message from an error.
-		fmt.Println(err.Error())
-	}
-}
-
-func wait_for_spot_req_active(client *ec2.EC2, spot_req_id *string) (instance_id *string) {
-	params := &ec2.DescribeSpotInstanceRequestsInput{
-		SpotInstanceRequestIds: []*string{spot_req_id}}
-
-	for {
-		resp, err := client.DescribeSpotInstanceRequests(params)
-		// If there is a problem with the state of the Spot instance then delete state and quit.
-		if err != nil {
-			fmt.Println(err.Error())
-			fmt.Println("ERROR: Could not determine state of spot instance.  Aborting and clearing cache spot instance id. (Retry?)")
-			os.Remove(".buildami.state")
-			panic("exiting")
-		}
-		if *resp.SpotInstanceRequests[0].State == ec2.SpotInstanceStateClosed {
-			fmt.Println("ERROR: spot instance state was closed.  Aborting and clearing cache spot instance id. (Retry?)")
-			os.Remove(".buildami.state")
-			panic("exiting")
-		}
-		if *resp.SpotInstanceRequests[0].Status.Code == "price-too-low" {
-			fmt.Println("ERROR: spot instance price was set too low.")
-			fmt.Println(*resp.SpotInstanceRequests[0].Status.Message)
-			cancel_spot_req(client, spot_req_id)
-			os.Remove(".buildami.state")
-			panic("exiting")
-		}
-		if *resp.SpotInstanceRequests[0].State == ec2.SpotInstanceStateActive {
-			return resp.SpotInstanceRequests[0].InstanceId
-		}
-		time.Sleep(5 * time.Second)
-	}
 }
 
 func get_instance_ip(client *ec2.EC2, id *string) (ip *string) {
@@ -194,7 +114,7 @@ func create_and_attach_volume(client *ec2.EC2, instance_id *string) (volume_id *
 	return save_volume_id
 }
 
-func ssh_cmd(instance_ip string, command string) (success bool) {
+func ssh_cmd(instance_ip string, command string) (output string, success bool) {
 	ssh := &easyssh.MakeConfig{
 		User:   "root",
 		Server: instance_ip,
@@ -203,16 +123,13 @@ func ssh_cmd(instance_ip string, command string) (success bool) {
 		Port: "22",
 	}
 	// Call Run method with command you want to run on remote server.
-	_, err := ssh.Run(command)
-
+	output, err := ssh.Run(command)
 	// Handle errors
 	if err != nil {
 		fmt.Println("Can't run remote command: " + err.Error())
-		//fmt.Println(response)
-		return false
+		return "", false
 	}
-	//fmt.Println(response)
-	return true
+	return output, true
 }
 
 func ssh_cp(instance_ip string, file string) {
@@ -349,13 +266,90 @@ func cleanup(client *ec2.EC2, volume_id *string) {
 	}
 }
 
-func harvest_software_versions(client *ec2.EC2, instance_ip *string) {
-	ssh_cmd(*instance_ip, "pacman -Q linux-ec2 2> /dev/null")
-	ssh_cmd(*instance_ip, "pacman -Q systemd 2> /dev/null")
-	ssh_cmd(*instance_ip, "pacman -Q kubernetes 2> /dev/null")
-	ssh_cmd(*instance_ip, "pacman -Q etcd 2> /dev/null")
-	ssh_cmd(*instance_ip, "pacman -Q rkt 2> /dev/null")
-	ssh_cmd(*instance_ip, "pacman -Q docker 2> /dev/null")
+func waitAndMakePublic(amiID *string, regionClient *ec2.EC2, wg *sync.WaitGroup) {
+	defer wg.Done()
+	// Wait for image to be available
+	fmt.Println("waiting for " + *amiID + " to be available...")
+	describeImagesInput := &ec2.DescribeImagesInput{
+		ImageIds: []*string{amiID},
+	}
+	if err := regionClient.WaitUntilImageAvailable(describeImagesInput); err !=
+		nil {
+		fmt.Println(err)
+	}
+
+	fmt.Println("making image public " + *amiID)
+	// Make public
+	publicParams := &ec2.ModifyImageAttributeInput{
+		ImageId:   amiID, // Required
+		Attribute: aws.String("launchPermission"),
+		LaunchPermission: &ec2.LaunchPermissionModifications{
+			Add: []*ec2.LaunchPermission{
+				{
+					Group: aws.String("all"),
+				},
+			},
+		},
+	}
+	_, errPub := regionClient.ModifyImageAttribute(publicParams)
+	if errPub != nil {
+		fmt.Println("error modifying " + *amiID + " to be public")
+		fmt.Println(errPub)
+	}
+}
+
+func publishRegions(svc *ec2.EC2, amiID string, imageTitle string) {
+	fmt.Println("publishing to regions...")
+	regionList := strings.Split(viper.GetString("publish.regions"), ",")
+	fmt.Println(regionList)
+	var wg sync.WaitGroup
+
+	// Make public the default region image.
+	if viper.GetString("publish.make_public") == "true" {
+		wg.Add(1)
+		go waitAndMakePublic(&amiID, svc, &wg)
+	}
+
+	// Copy and make public for all specified regions.
+	for destRegion := range regionList {
+		// create new ec2 client for this destination region
+		regionClient := ec2.New(session.New(), &aws.Config{Region: aws.String(regionList[destRegion])})
+		// copy to dest region
+		copyParams := &ec2.CopyImageInput{
+			Description:   aws.String(imageTitle),
+			Name:          aws.String(imageTitle),
+			SourceImageId: aws.String(amiID),
+			SourceRegion:  aws.String(viper.GetString("build.region")),
+		}
+		respCopy, errCopy := regionClient.CopyImage(copyParams)
+		if errCopy != nil {
+			fmt.Println("something went wrong copying to dest region: " + regionList[destRegion])
+			fmt.Println(errCopy)
+		}
+		fmt.Println(regionList[destRegion] + "," + *respCopy.ImageId)
+		wg.Add(1)
+		if viper.GetString("publish.make_public") == "true" {
+			go waitAndMakePublic(respCopy.ImageId, regionClient, &wg)
+		}
+		recordManifestID(respCopy.ImageId, regionList[destRegion])
+	}
+
+	if viper.GetString("publish.make_public") == "true" {
+		wg.Wait()
+	}
+	fmt.Println("all regions copied")
+}
+
+func recordManifestID(amiID *string, region string) {
+	// Record test output to file
+	theBytes := []byte(*amiID)
+	outPath := path.Join(viper.GetString("publish.manifest_dir"), region)
+	err := ioutil.WriteFile(outPath, theBytes, 0644)
+
+	if err != nil {
+		fmt.Println("WARNING: error occured writing to region manifest file" + outPath)
+		fmt.Println(err)
+	}
 }
 
 func main() {
@@ -381,6 +375,7 @@ func main() {
 	t := time.Now()
 	timestamp := t.Format("2006-01-02-150405")
 	image_title := *image_prefix + timestamp
+
 	svc := ec2.New(session.New(), &aws.Config{Region: aws.String(viper.GetString("build.region"))})
 	// Check for existing builder
 	instanceID := aws.String("")
@@ -398,6 +393,7 @@ func main() {
 	//instance_id := wait_for_spot_req_active(svc, spot_req_id)
 	// get it's IP address
 	fmt.Println("Getting instance ip address...")
+	// TODO: there's a race condition here where instance IP isn't available yet..
 	instance_ip := get_instance_ip(svc, instanceID)
 	fmt.Println("Instance IP address: " + *instance_ip)
 	// create and attach
@@ -406,9 +402,12 @@ func main() {
 	fmt.Println("Waiting for ssh connect...")
 	// start sshing there
 	for {
-		if ssh_cmd(*instance_ip, "/bin/true") {
+		output, success := ssh_cmd(*instance_ip, "/bin/true")
+		if success {
 			break
 		}
+		fmt.Println(output)
+
 		time.Sleep(time.Second * 5)
 	}
 	// SCP the payload install file
@@ -417,7 +416,16 @@ func main() {
 	ssh_cmd(*instance_ip, "chmod +x "+*payload_script_name)
 	// ssh there and run the payload
 	fmt.Println("Running" + *payload_script_name)
-	if ssh_cmd(*instance_ip, "sudo "+*payload_script_name+" /dev/xvdx") {
+	chrootOutput, success := ssh_cmd(*instance_ip, *payload_script_name+" /dev/xvdx")
+	// Record chroot output to file
+	chrootBytes := []byte(chrootOutput)
+	chrootOutputPath := path.Join(viper.GetString("publish.manifest_dir"), viper.GetString("build.region")+"_chroot.log")
+	errChrootFile := ioutil.WriteFile(chrootOutputPath, chrootBytes, 0644)
+	if errChrootFile != nil {
+		fmt.Println("WARNING: error occured writing to chroot.log file")
+		fmt.Println(errChrootFile)
+	}
+	if success {
 		fmt.Println("script success!")
 		//ssh_cmd(*instance_ip, "sudo systemctl halt")// poweroff
 	} else {
@@ -425,10 +433,15 @@ func main() {
 		//fmt.Println("umounting /mnt")
 		ssh_cmd(*instance_ip, "sudo umount /mnt")
 		fmt.Println("Builder IP: " + *instance_ip)
-		fmt.Println("Image build payload failed!  Aborting in-flight for inspection.")
-		fail_reader := bufio.NewReader(os.Stdin)
-		fmt.Print("If you want to fix this manually. Press ENTER to continue the build (CTRL-C to abort):")
-		fail_reader.ReadString('\n')
+		if *interactive_flag {
+			fmt.Println("Image build payload failed!  Aborting in-flight for inspection.")
+			fail_reader := bufio.NewReader(os.Stdin)
+			fmt.Print("If you want to fix this manually. Press ENTER to continue the build (CTRL-C to abort):")
+			fail_reader.ReadString('\n')
+		} else {
+			fmt.Println("Aborting build due to chroot failure.")
+			os.Exit(1)
+		}
 	}
 	// Pause for user inspection
 	if *interactive_flag {
@@ -474,11 +487,55 @@ func main() {
 
 	fmt.Println("waiting for ssh...")
 	for {
-		if ssh_cmd(*testInstanceIP, "/bin/true") {
+		_, success := ssh_cmd(*testInstanceIP, "/bin/true")
+		if success {
 			break
 		}
 		time.Sleep(time.Second * 5)
 	}
-	harvest_software_versions(svc, testInstanceIP)
+
+	// Run test harness
+	ssh_cp(*testInstanceIP, "./testarch.sh")
+	ssh_cmd(*testInstanceIP, "chmod +x testarch.sh")
+	testOutput, testSuccess := ssh_cmd(*testInstanceIP, "./testarch.sh")
+
+	// Print test output to screen
+	fmt.Println(testOutput)
+	// Record test output to file
+	testBytes := []byte(testOutput)
+	testOutputPath := path.Join(viper.GetString("publish.manifest_dir"), *ami_id+"_"+viper.GetString("build.region")+"_testoutput.log")
+	errTest := ioutil.WriteFile(testOutputPath, testBytes, 0644)
+
+	if errTest != nil {
+		fmt.Println("WARNING: error occured writing to testoutput.log file")
+		fmt.Println(errTest)
+	}
+
 	fmt.Println("AMI: " + *ami_id)
+	recordManifestID(ami_id, viper.GetString("build.region"))
+
+	if testSuccess {
+		if *interactive_flag {
+			continueReader := bufio.NewReader(os.Stdin)
+			fmt.Print("Testing complete ^^ Pausing for user input before publishing. Press ENTER to continue, CTRL-C to abort.")
+			continueReader.ReadString('\n')
+		}
+		// Terminate test instance
+		termParams := &ec2.TerminateInstancesInput{
+			InstanceIds: []*string{testInstanceID},
+		}
+		_, termErr := svc.TerminateInstances(termParams)
+		if termErr != nil {
+			fmt.Println("error occured terminating test instance.")
+			fmt.Println(termErr)
+		} else {
+			fmt.Println("test instance terminated.")
+		}
+
+		publishRegions(svc, *ami_id, image_title)
+	} else {
+		fmt.Println("tests failed ^^ aborting publishing.")
+		os.Exit(1)
+	}
+
 }
