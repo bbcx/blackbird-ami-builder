@@ -499,6 +499,19 @@ func main() {
 	ssh_cmd(*testInstanceIP, "chmod +x testarch.sh")
 	testOutput, testSuccess := ssh_cmd(*testInstanceIP, "./testarch.sh")
 
+	// Harvest Software Versions from test instance
+	ssh_cp(*testInstanceIP, "./harvestversions.sh")
+	ssh_cmd(*testInstanceIP, "chmod +x harvestversions.sh")
+	versionOutput, _ := ssh_cmd(*testInstanceIP, "./harvestversions.sh")
+	versionBytes := []byte(versionOutput)
+	versionOutputDir := path.Join(viper.GetString("publish.manifest_dir"), "versions.md")
+	errVersion := ioutil.WriteFile(versionOutputDir, versionBytes, 0644)
+
+	if errVersion != nil {
+		fmt.Println("WARNING: error occured writing to versions.md file")
+		fmt.Println(errVersion)
+	}
+
 	// Print test output to screen
 	fmt.Println(testOutput)
 	// Record test output to file
@@ -530,6 +543,18 @@ func main() {
 			fmt.Println(termErr)
 		} else {
 			fmt.Println("test instance terminated.")
+		}
+
+		// Terminate build instance
+		termBuildInstance := &ec2.TerminateInstancesInput{
+			InstanceIds: []*string{instanceID},
+		}
+		_, termBuildError := svc.TerminateInstances(termBuildInstance)
+		if termBuildError != nil {
+			fmt.Println("error occured terminating bulid instance.")
+			fmt.Println(termBuildInstance)
+		} else {
+			fmt.Println("build instance terminated.")
 		}
 
 		publishRegions(svc, *ami_id, image_title)

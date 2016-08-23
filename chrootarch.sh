@@ -240,7 +240,7 @@ arch-chroot /mnt /bin/bash -c "pacman --needed --noconfirm -S audit cronie irqba
 #   - rsync - frequently used to get files between hosts (or from hosts to
 #             instances)
 #   - vim - plain old vi just won't do for me.
-arch-chroot /mnt /bin/bash -c "pacman --needed --noconfirm -S rsync vim"
+arch-chroot /mnt /bin/bash -c "pacman --needed --noconfirm -S rsync vim emacs"
 
 arch-chroot /mnt /bin/bash -c "pacman --noconfirm -S ec2-pacman-mirrors"
 
@@ -260,7 +260,7 @@ fi
 arch-chroot /mnt /bin/bash -c "mkinitcpio -p linux${KVARIANT}"
 
 # CoreOS & Blackbird additional packages
-arch-chroot /mnt /bin/bash -c "pacman --noconfirm -Sy rkt coreos-cloudinit-git update-ssh-keys kubernetes etcd docker net-tools wget dnsutils conntrack-tools ethtool libmicrohttpd git python-aws-cli"
+arch-chroot /mnt /bin/bash -c "pacman --noconfirm -Sy rkt coreos-cloudinit-git update-ssh-keys kubernetes etcd docker net-tools wget dnsutils conntrack-tools ethtool libmicrohttpd git aws-cli go go-tools"
 
 # Upgrade the rolling release
 arch-chroot /mnt /bin/bash -c "pacman -Syu --noconfirm"

@@ -181,13 +181,13 @@ EOF
 
 # EC2-specific package repository
 cat >> /mnt/etc/pacman.conf <<"EOF"
-[gpu]
-SigLevel = PackageRequired
-Server = https://www.uplinklabs.net/repo/$repo/$arch
-
-[ec2]
-SigLevel = PackageRequired
-Server = https://www.uplinklabs.net/repo/ec2/$arch
+#[gpu]
+#SigLevel = PackageRequired
+#Server = https://www.uplinklabs.net/repo/$repo/$arch
+#
+#[ec2]
+#SigLevel = PackageRequired
+#Server = https://www.uplinklabs.net/repo/ec2/$arch
 
 [bbs]
 SigLevel = PackageRequired
