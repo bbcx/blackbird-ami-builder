@@ -10,4 +10,7 @@ pacman -Q docker 2> /dev/null
 
 systemctl status
 
+echo nf_conntrack_max:
+cat /proc/sys/net/netfilter/nf_conntrack_max
+
 echo testing complete.

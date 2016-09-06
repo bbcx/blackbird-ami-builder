@@ -46,17 +46,24 @@ func launchInstance(client *ec2.EC2, ami *string) *string {
 	return resp.Instances[0].InstanceId
 }
 
-func get_instance_ip(client *ec2.EC2, id *string) (ip *string) {
+func get_instance_ip(client *ec2.EC2, id *string, count int64) (ip *string) {
 	params := &ec2.DescribeInstancesInput{
 		InstanceIds: []*string{id}}
 
 	resp, err := client.DescribeInstances(params)
-
-	if err != nil {
-		fmt.Println(err.Error())
+	count--
+	returnMe := resp.Reservations[0].Instances[0].PublicIpAddress
+	if err != nil || returnMe == nil {
+		fmt.Print(".")
+		if count == 0 {
+			fmt.Println("retry count exceeded getting instance ip. exiting.")
+			os.Exit(1)
+		}
+		time.Sleep(time.Second)
+		return get_instance_ip(client, id, count)
 	}
 	//fmt.Println(resp)
-	return resp.Reservations[0].Instances[0].PublicIpAddress
+	return returnMe
 }
 
 func write_state(instanceID *string) {
@@ -394,7 +401,7 @@ func main() {
 	// get it's IP address
 	fmt.Println("Getting instance ip address...")
 	// TODO: there's a race condition here where instance IP isn't available yet..
-	instance_ip := get_instance_ip(svc, instanceID)
+	instance_ip := get_instance_ip(svc, instanceID, 30)
 	fmt.Println("Instance IP address: " + *instance_ip)
 	// create and attach
 	fmt.Println("Creating and attaching new volume...")
@@ -481,7 +488,7 @@ func main() {
 
 	testInstanceID := launchInstance(svc, ami_id)
 	time.Sleep(time.Second * 10)
-	testInstanceIP := get_instance_ip(svc, testInstanceID)
+	testInstanceIP := get_instance_ip(svc, testInstanceID, 0)
 
 	fmt.Println("test instance public ip: " + *testInstanceIP)
 

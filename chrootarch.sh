@@ -1,7 +1,8 @@
 #!/bin/bash -ex
 set -ex
 
-KVARIANT=-ec2
+# Stock kernel
+KVARIANT=""
 
 DEV=$1
 [ -z "$DEV" ] && echo "usage: install <DEVICE>" && exit 1
@@ -240,7 +241,7 @@ arch-chroot /mnt /bin/bash -c "pacman --needed --noconfirm -S audit cronie irqba
 #   - rsync - frequently used to get files between hosts (or from hosts to
 #             instances)
 #   - vim - plain old vi just won't do for me.
-arch-chroot /mnt /bin/bash -c "pacman --needed --noconfirm -S rsync vim emacs"
+#arch-chroot /mnt /bin/bash -c "pacman --needed --noconfirm -S rsync vim emacs"
 
 arch-chroot /mnt /bin/bash -c "pacman --noconfirm -S ec2-pacman-mirrors"
 
@@ -260,10 +261,14 @@ fi
 arch-chroot /mnt /bin/bash -c "mkinitcpio -p linux${KVARIANT}"
 
 # CoreOS & Blackbird additional packages
-arch-chroot /mnt /bin/bash -c "pacman --noconfirm -Sy rkt coreos-cloudinit-git update-ssh-keys kubernetes etcd docker net-tools wget dnsutils conntrack-tools ethtool libmicrohttpd git aws-cli go go-tools"
+arch-chroot /mnt /bin/bash -c "pacman --noconfirm -Sy rsync rkt coreos-cloudinit-git update-ssh-keys kubernetes etcd docker net-tools wget dnsutils conntrack-tools ethtool libmicrohttpd git aws-cli go go-tools jq"
 
 # Upgrade the rolling release
 arch-chroot /mnt /bin/bash -c "pacman -Syu --noconfirm"
+
+# Downgrade docker
+cp /root/*.xz /mnt/root/
+arch-chroot /mnt /bin/bash -c "pacman -U --noconfirm /root/*.xz"
 
 # Install the bootloader used in HVM. For PV, we just use the pv-grub AKI.
 if [ $EFI_BOOT ]; then
@@ -450,7 +455,7 @@ noarp
 EOF
 
 # Bring up eth0 at boot.
-cat > /mnt/etc/systemd/network/ethernet.network <<- "EOF"
+cat > /mnt/etc/systemd/network/ethernet.network <<-EOF
 [Match]
 Name=en*
 [Network]
@@ -460,7 +465,7 @@ UseMTU=yes
 UseDNS=yes
 EOF
 
-cat > /mnt/etc/systemd/network/virtual-eth0.network <<- "EOF"
+cat > /mnt/etc/systemd/network/virtual-eth0.network <<-EOF
 [Match]
 Name=eth*
 [Network]
@@ -468,6 +473,15 @@ DHCP=both
 [DHCP]
 UseMTU=yes
 UseDNS=yes
+EOF
+
+# Increase netfilter conntrack max for kubernetes / docker.
+cat > /mnt/usr/lib/sysctl.d/01-sysctl.conf <<-EOF
+net.netfilter.nf_conntrack_max = 1048576
+EOF
+# Module must be loaded for sysctl to apply settings.
+cat > /mnt/etc/modules-load.d/nf_conntrack.conf <<-EOF
+nf_conntrack
 EOF
 
 # systemd-networkd is incorrectly symlinked in the default install. Disable and re-enable it.
